@@ -80,6 +80,34 @@ static void win32ProcessMessages() {
   }
 }
 
+typedef VkResult vkEnumerateInstanceExtensionPropertiesT(const char *, uint32_t *,
+                                                         VkExtensionProperties *);
+void OXIvkEnumerateInstanceExtensionProperties(
+    vkEnumerateInstanceExtensionPropertiesT *vkEnumerateInstanceExtensionProperties,
+    char *layerName) {
+
+  uint32_t nInstanceExtensions;
+  assert(vkEnumerateInstanceExtensionProperties(layerName, &nInstanceExtensions, 0) == VK_SUCCESS);
+  VkExtensionProperties *pInstanceExtensions =
+      (VkExtensionProperties *)malloc(nInstanceExtensions * sizeof(VkExtensionProperties));
+  assert(vkEnumerateInstanceExtensionProperties(layerName, &nInstanceExtensions,
+                                                pInstanceExtensions) == VK_SUCCESS);
+  fprintf(logFile, "\t\textensions: {\n");
+  for (int i = 0; i < nInstanceExtensions; ++i) {
+    fprintf(logFile, "\t\t\t%s,\n", pInstanceExtensions[i].extensionName);
+  }
+  fprintf(logFile, "\t\t}\n");
+  free(pInstanceExtensions);
+}
+
+static VKAPI_ATTR VkBool32 callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                    VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+                                    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                                    void *pUserData) {
+  fprintf(logFile, "callback: %s\n", pCallbackData->pMessage);
+  return VK_FALSE;
+}
+
 /**
  * https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderInterfaceArchitecture.md
  * https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderApplicationInterface.md
@@ -110,17 +138,13 @@ static int win32LoadVulkan() {
     return -1;
   }
 
-  uint32_t propertyCount;
-  assert(vkEnumerateInstanceLayerProperties(&propertyCount, 0) == VK_SUCCESS);
-  VkLayerProperties *pProperties =
-      (VkLayerProperties *)malloc(propertyCount * sizeof(VkLayerProperties));
-  assert(vkEnumerateInstanceLayerProperties(&propertyCount, pProperties) == VK_SUCCESS);
-  fprintf(logFile, "Layers available: {\n");
-  for (int i = 0; i < propertyCount; ++i) {
-    fprintf(logFile, "\t%s,\n", pProperties[i].layerName);
+  vkEnumerateInstanceExtensionPropertiesT *vkEnumerateInstanceExtensionProperties =
+      (vkEnumerateInstanceExtensionPropertiesT *)(vkGetInstanceProcAddr(
+          0, "vkEnumerateInstanceExtensionProperties"));
+  if (!vkEnumerateInstanceExtensionProperties) {
+    fprintf(logFile, "No vkEnumerateInstanceExtensionProperties!\n");
+    return -1;
   }
-  fprintf(logFile, "}\n");
-  free(pProperties);
 
   typedef VkResult vkCreateInstanceT(const VkInstanceCreateInfo *, const VkAllocationCallbacks *,
                                      VkInstance *);
@@ -131,17 +155,70 @@ static int win32LoadVulkan() {
     return -1;
   }
 
+  OXIvkEnumerateInstanceExtensionProperties(vkEnumerateInstanceExtensionProperties, 0);
+  uint32_t nInstanceLayers;
+  assert(vkEnumerateInstanceLayerProperties(&nInstanceLayers, 0) == VK_SUCCESS);
+  VkLayerProperties *pInstanceLayers =
+      (VkLayerProperties *)malloc(nInstanceLayers * sizeof(VkLayerProperties));
+  assert(vkEnumerateInstanceLayerProperties(&nInstanceLayers, pInstanceLayers) == VK_SUCCESS);
+  fprintf(logFile, "Layers available: {\n");
+  for (int i = 0; i < nInstanceLayers; ++i) {
+    fprintf(logFile, "\t%s:{\n", pInstanceLayers[i].layerName);
+    OXIvkEnumerateInstanceExtensionProperties(vkEnumerateInstanceExtensionProperties,
+                                              pInstanceLayers[i].layerName);
+    fprintf(logFile, "\t},\n");
+  }
+  fprintf(logFile, "},\n");
+  free(pInstanceLayers);
+
   char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
+  char *instance_extensions[] = {"VK_EXT_debug_utils"};
   const VkApplicationInfo app_info = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                       .pApplicationName = "OXIGINE_APP",
                                       .pEngineName = "OXIGINE_ENGINE",
                                       .apiVersion = VK_API_VERSION_1_0};
+  VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT = {
+      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
+                     VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
+      callback};
+  VkValidationFeatureEnableEXT enabled_features[] = {
+      VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
+      VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT,
+      VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT};
+  const VkValidationFeaturesEXT validation_features = {
+      .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+      .enabledValidationFeatureCount = sizeof(enabled_features) / sizeof(enabled_features[0]),
+      .pEnabledValidationFeatures = enabled_features,
+      .pNext = &debugUtilsMessengerCreateInfoEXT};
+
   const VkInstanceCreateInfo instance_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                                              .pNext = &validation_features,
                                               .pApplicationInfo = &app_info,
                                               .enabledLayerCount = 1,
-                                              .ppEnabledLayerNames = instance_layers};
+                                              .ppEnabledLayerNames = instance_layers,
+                                              .enabledExtensionCount = 1,
+                                              .ppEnabledExtensionNames = instance_extensions};
   VkInstance instance;
   assert(vkCreateInstance(&instance_info, 0, &instance) == VK_SUCCESS);
+
+  PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT =
+      (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance,
+                                                                "vkCreateDebugUtilsMessengerEXT");
+  if (!vkCreateDebugUtilsMessengerEXT) {
+    fprintf(logFile, "((\n");
+    return -1;
+  }
+
+  VkDebugUtilsMessengerEXT messenger;
+  assert(vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
+                                        &messenger) == VK_SUCCESS);
   return 0;
 }
 
@@ -166,9 +243,9 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLi
   }
 
   globalRunning = true;
-  while (globalRunning) {
-    win32ProcessMessages();
-  }
+  // while (globalRunning) {
+  //   win32ProcessMessages();
+  // }
 
   fclose(logFile);
 }
