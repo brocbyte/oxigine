@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <windows.h>
 
-#include <stdio.h>
 #include <assert.h>
+#include <stdio.h>
 #include <vulkan/vulkan.h>
 
 typedef uint8_t u8;
@@ -115,10 +115,33 @@ static int win32LoadVulkan() {
   VkLayerProperties *pProperties =
       (VkLayerProperties *)malloc(propertyCount * sizeof(VkLayerProperties));
   assert(vkEnumerateInstanceLayerProperties(&propertyCount, pProperties) == VK_SUCCESS);
+  fprintf(logFile, "Layers available: {\n");
   for (int i = 0; i < propertyCount; ++i) {
-    fprintf(logFile, "layer %d: %s\n", i, pProperties[i].layerName);
+    fprintf(logFile, "\t%s,\n", pProperties[i].layerName);
   }
+  fprintf(logFile, "}\n");
   free(pProperties);
+
+  typedef VkResult vkCreateInstanceT(const VkInstanceCreateInfo *, const VkAllocationCallbacks *,
+                                     VkInstance *);
+  vkCreateInstanceT *vkCreateInstance =
+      (vkCreateInstanceT *)(vkGetInstanceProcAddr(0, "vkCreateInstance"));
+  if (!vkCreateInstance) {
+    fprintf(logFile, "No vkCreateInstance!\n");
+    return -1;
+  }
+
+  char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
+  const VkApplicationInfo app_info = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                                      .pApplicationName = "OXIGINE_APP",
+                                      .pEngineName = "OXIGINE_ENGINE",
+                                      .apiVersion = VK_API_VERSION_1_0};
+  const VkInstanceCreateInfo instance_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                                              .pApplicationInfo = &app_info,
+                                              .enabledLayerCount = 1,
+                                              .ppEnabledLayerNames = instance_layers};
+  VkInstance instance;
+  assert(vkCreateInstance(&instance_info, 0, &instance) == VK_SUCCESS);
   return 0;
 }
 
