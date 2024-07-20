@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "*.log_backup1": "log",
+        "*.cu": "cpp",
+        "xinput.h": "c",
+        "objbase.h": "c",
+        "repeater.h": "c",
+        "win32_repeater.h": "c",
+        "audioclient.h": "c",
+        "initguid.h": "c",
+        "guiddef.h": "c",
+        "stdbool.h": "c",
+        "vulkan.h": "c"
+    },
+    "vim.handleKeys": {
+        "<C-p>": false,
+        "<C-b>": false
+    }
+}

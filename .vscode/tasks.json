@@ -1,0 +1,40 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": ".\\build_win32.bat",
+            "windows": {
+                "command": ".\\build_win32.bat"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": ".\\run_win32.bat",
+            "windows": {
+                "command": ".\\run_win32.bat"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+        },
+        {
+            "label": "debug",
+            "type": "shell",
+            "command": ".\\debug.bat",
+            "windows": {
+                "command": ".\\debug.bat"
+            },
+            "problemMatcher": [],
+        }
+    ]
+}
