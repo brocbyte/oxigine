@@ -14,6 +14,15 @@
 #include <stdio.h>
 #include <vulkan/vulkan.h>
 
+#define GET_INSTANCE_PROC_ADDR(instance, name)                                                     \
+  PFN_##name name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                          \
+  do {                                                                                             \
+    if (!name) {                                                                                   \
+      fprintf(logFile, "No %s\n", #name);                                                          \
+      return -1;                                                                                   \
+    }                                                                                              \
+  } while (false)
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -80,10 +89,8 @@ static void win32ProcessMessages() {
   }
 }
 
-typedef VkResult vkEnumerateInstanceExtensionPropertiesT(const char *, uint32_t *,
-                                                         VkExtensionProperties *);
 void OXIvkEnumerateInstanceExtensionProperties(
-    vkEnumerateInstanceExtensionPropertiesT *vkEnumerateInstanceExtensionProperties,
+    PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties,
     char *layerName) {
 
   uint32_t nInstanceExtensions;
@@ -100,10 +107,10 @@ void OXIvkEnumerateInstanceExtensionProperties(
   free(pInstanceExtensions);
 }
 
-static VKAPI_ATTR VkBool32 callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                                    VkDebugUtilsMessageTypeFlagsEXT messageTypes,
-                                    const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-                                    void *pUserData) {
+static VKAPI_ATTR VkBool32 debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                         VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+                                         const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                                         void *pUserData) {
   fprintf(logFile, "callback: %s\n", pCallbackData->pMessage);
   return VK_FALSE;
 }
@@ -120,40 +127,17 @@ static int win32LoadVulkan() {
     return -1;
   }
 
-  typedef PFN_vkVoidFunction vkGetInstanceProcAddrT(VkInstance, const char *);
-  vkGetInstanceProcAddrT *vkGetInstanceProcAddr =
-      (vkGetInstanceProcAddrT *)(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
+  PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr =
+      (PFN_vkGetInstanceProcAddr)(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
 
   if (!vkGetInstanceProcAddr) {
     fprintf(logFile, "No vkGetInstanceProcAddr!\n");
     return -1;
   }
 
-  typedef VkResult vkEnumerateInstanceLayerPropertiesT(uint32_t *, VkLayerProperties *);
-  vkEnumerateInstanceLayerPropertiesT *vkEnumerateInstanceLayerProperties =
-      (vkEnumerateInstanceLayerPropertiesT *)(vkGetInstanceProcAddr(
-          0, "vkEnumerateInstanceLayerProperties"));
-  if (!vkEnumerateInstanceLayerProperties) {
-    fprintf(logFile, "No vkEnumerateInstanceLayerProperties!\n");
-    return -1;
-  }
-
-  vkEnumerateInstanceExtensionPropertiesT *vkEnumerateInstanceExtensionProperties =
-      (vkEnumerateInstanceExtensionPropertiesT *)(vkGetInstanceProcAddr(
-          0, "vkEnumerateInstanceExtensionProperties"));
-  if (!vkEnumerateInstanceExtensionProperties) {
-    fprintf(logFile, "No vkEnumerateInstanceExtensionProperties!\n");
-    return -1;
-  }
-
-  typedef VkResult vkCreateInstanceT(const VkInstanceCreateInfo *, const VkAllocationCallbacks *,
-                                     VkInstance *);
-  vkCreateInstanceT *vkCreateInstance =
-      (vkCreateInstanceT *)(vkGetInstanceProcAddr(0, "vkCreateInstance"));
-  if (!vkCreateInstance) {
-    fprintf(logFile, "No vkCreateInstance!\n");
-    return -1;
-  }
+  GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceLayerProperties);
+  GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceExtensionProperties);
+  GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
 
   OXIvkEnumerateInstanceExtensionProperties(vkEnumerateInstanceExtensionProperties, 0);
   uint32_t nInstanceLayers;
@@ -187,7 +171,7 @@ static int win32LoadVulkan() {
                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
-      callback};
+      debugCallback};
   VkValidationFeatureEnableEXT enabled_features[] = {
       VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
       VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT,
@@ -208,13 +192,7 @@ static int win32LoadVulkan() {
   VkInstance instance;
   assert(vkCreateInstance(&instance_info, 0, &instance) == VK_SUCCESS);
 
-  PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT =
-      (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance,
-                                                                "vkCreateDebugUtilsMessengerEXT");
-  if (!vkCreateDebugUtilsMessengerEXT) {
-    fprintf(logFile, "((\n");
-    return -1;
-  }
+  GET_INSTANCE_PROC_ADDR(instance, vkCreateDebugUtilsMessengerEXT);
 
   VkDebugUtilsMessengerEXT messenger;
   assert(vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
