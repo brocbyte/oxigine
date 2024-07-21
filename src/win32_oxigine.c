@@ -14,14 +14,26 @@
 #include <stdio.h>
 #include <vulkan/vulkan.h>
 
-#define GET_INSTANCE_PROC_ADDR(instance, name)                                                     \
-  PFN_##name name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                          \
+typedef struct OXI_DISPATCH {
+  PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
+  PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
+  PFN_vkCreateInstance vkCreateInstance;
+  PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
+} OXI_DISPATCH;
+
+static OXI_DISPATCH vt;
+
+#define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
+  vt.name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                                  \
   do {                                                                                             \
-    if (!name) {                                                                                   \
+    if (!vt.name) {                                                                                \
       fprintf(logFile, "No %s\n", #name);                                                          \
       return -1;                                                                                   \
     }                                                                                              \
   } while (false)
+
+#define VOK(val) assert(val == VK_SUCCESS)
+#define asize(arr) ((sizeof(arr) / sizeof(arr[0])))
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -89,29 +101,41 @@ static void win32ProcessMessages() {
   }
 }
 
-void OXIvkEnumerateInstanceExtensionProperties(
-    PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties,
-    char *layerName) {
+static void OXIvkEnumerateInstanceExtensionProperties(char *layerName) {
+  uint32_t nExtensions;
+  VOK(vt.vkEnumerateInstanceExtensionProperties(layerName, &nExtensions, 0));
 
-  uint32_t nInstanceExtensions;
-  assert(vkEnumerateInstanceExtensionProperties(layerName, &nInstanceExtensions, 0) == VK_SUCCESS);
-  VkExtensionProperties *pInstanceExtensions =
-      (VkExtensionProperties *)malloc(nInstanceExtensions * sizeof(VkExtensionProperties));
-  assert(vkEnumerateInstanceExtensionProperties(layerName, &nInstanceExtensions,
-                                                pInstanceExtensions) == VK_SUCCESS);
+  VkExtensionProperties *pExtensions =
+      (VkExtensionProperties *)malloc(nExtensions * sizeof(VkExtensionProperties));
+  VOK(vt.vkEnumerateInstanceExtensionProperties(layerName, &nExtensions, pExtensions));
   fprintf(logFile, "\t\textensions: {\n");
-  for (int i = 0; i < nInstanceExtensions; ++i) {
-    fprintf(logFile, "\t\t\t%s,\n", pInstanceExtensions[i].extensionName);
+  for (int i = 0; i < nExtensions; ++i) {
+    fprintf(logFile, "\t\t\t%s,\n", pExtensions[i].extensionName);
   }
   fprintf(logFile, "\t\t}\n");
-  free(pInstanceExtensions);
+  free(pExtensions);
 }
 
-static VKAPI_ATTR VkBool32 debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                                         VkDebugUtilsMessageTypeFlagsEXT messageTypes,
-                                         const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-                                         void *pUserData) {
-  fprintf(logFile, "callback: %s\n", pCallbackData->pMessage);
+static void OXIvkEnumerateInstanceLayerProperties() {
+  uint32_t nLayers;
+  VOK(vt.vkEnumerateInstanceLayerProperties(&nLayers, 0));
+  VkLayerProperties *pLayers = (VkLayerProperties *)malloc(nLayers * sizeof(VkLayerProperties));
+  VOK(vt.vkEnumerateInstanceLayerProperties(&nLayers, pLayers));
+  fprintf(logFile, "Layers available: {\n");
+  for (int i = 0; i < nLayers; ++i) {
+    fprintf(logFile, "\t%s:{\n", pLayers[i].layerName);
+    OXIvkEnumerateInstanceExtensionProperties(pLayers[i].layerName);
+    fprintf(logFile, "\t},\n");
+  }
+  fprintf(logFile, "},\n");
+  free(pLayers);
+}
+
+static VKAPI_ATTR VkBool32
+debugMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                       VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+                       const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData, void *pUserData) {
+  fprintf(logFile, "debug: %s\n", pCallbackData->pMessage);
   return VK_FALSE;
 }
 
@@ -135,32 +159,13 @@ static int win32LoadVulkan() {
     return -1;
   }
 
-  GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceLayerProperties);
-  GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceExtensionProperties);
-  GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
+  VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceLayerProperties);
+  VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceExtensionProperties);
+  VK_GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
 
-  OXIvkEnumerateInstanceExtensionProperties(vkEnumerateInstanceExtensionProperties, 0);
-  uint32_t nInstanceLayers;
-  assert(vkEnumerateInstanceLayerProperties(&nInstanceLayers, 0) == VK_SUCCESS);
-  VkLayerProperties *pInstanceLayers =
-      (VkLayerProperties *)malloc(nInstanceLayers * sizeof(VkLayerProperties));
-  assert(vkEnumerateInstanceLayerProperties(&nInstanceLayers, pInstanceLayers) == VK_SUCCESS);
-  fprintf(logFile, "Layers available: {\n");
-  for (int i = 0; i < nInstanceLayers; ++i) {
-    fprintf(logFile, "\t%s:{\n", pInstanceLayers[i].layerName);
-    OXIvkEnumerateInstanceExtensionProperties(vkEnumerateInstanceExtensionProperties,
-                                              pInstanceLayers[i].layerName);
-    fprintf(logFile, "\t},\n");
-  }
-  fprintf(logFile, "},\n");
-  free(pInstanceLayers);
+  OXIvkEnumerateInstanceExtensionProperties(0);
+  OXIvkEnumerateInstanceLayerProperties();
 
-  char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
-  char *instance_extensions[] = {"VK_EXT_debug_utils"};
-  const VkApplicationInfo app_info = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                                      .pApplicationName = "OXIGINE_APP",
-                                      .pEngineName = "OXIGINE_ENGINE",
-                                      .apiVersion = VK_API_VERSION_1_0};
   VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
       .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
@@ -171,32 +176,38 @@ static int win32LoadVulkan() {
                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
                      VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
-      debugCallback};
-  VkValidationFeatureEnableEXT enabled_features[] = {
+      debugMessengerCallback};
+  VkValidationFeatureEnableEXT aValidationFeatureEnableEXT[] = {
       VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
       VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT,
       VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT};
-  const VkValidationFeaturesEXT validation_features = {
+  const VkValidationFeaturesEXT validationFeaturesEXT = {
       .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
-      .enabledValidationFeatureCount = sizeof(enabled_features) / sizeof(enabled_features[0]),
-      .pEnabledValidationFeatures = enabled_features,
+      .enabledValidationFeatureCount = asize(aValidationFeatureEnableEXT),
+      .pEnabledValidationFeatures = aValidationFeatureEnableEXT,
       .pNext = &debugUtilsMessengerCreateInfoEXT};
 
-  const VkInstanceCreateInfo instance_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-                                              .pNext = &validation_features,
-                                              .pApplicationInfo = &app_info,
-                                              .enabledLayerCount = 1,
-                                              .ppEnabledLayerNames = instance_layers,
-                                              .enabledExtensionCount = 1,
-                                              .ppEnabledExtensionNames = instance_extensions};
+  char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
+  char *instance_extensions[] = {"VK_EXT_debug_utils"};
+  const VkApplicationInfo applicationInfo = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+                                             .pApplicationName = "OXIGINE_APP",
+                                             .pEngineName = "OXIGINE_ENGINE",
+                                             .apiVersion = VK_API_VERSION_1_3};
+  const VkInstanceCreateInfo instanceCreateInfo = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                                                   .pNext = &validationFeaturesEXT,
+                                                   .pApplicationInfo = &applicationInfo,
+                                                   .enabledLayerCount = 1,
+                                                   .ppEnabledLayerNames = instance_layers,
+                                                   .enabledExtensionCount = 1,
+                                                   .ppEnabledExtensionNames = instance_extensions};
   VkInstance instance;
-  assert(vkCreateInstance(&instance_info, 0, &instance) == VK_SUCCESS);
+  VOK(vt.vkCreateInstance(&instanceCreateInfo, 0, &instance));
 
-  GET_INSTANCE_PROC_ADDR(instance, vkCreateDebugUtilsMessengerEXT);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkCreateDebugUtilsMessengerEXT);
 
   VkDebugUtilsMessengerEXT messenger;
-  assert(vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
-                                        &messenger) == VK_SUCCESS);
+  VOK(vt.vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
+                                        &messenger));
   return 0;
 }
 
