@@ -14,25 +14,30 @@
 #include <stdio.h>
 #include <vulkan/vulkan.h>
 
-typedef struct OXI_DISPATCH {
+#define OXIAssertT(exp, ...)                                                                       \
+  do {                                                                                             \
+    if (!(exp)) {                                                                                  \
+      fprintf(logFile, __VA_ARGS__);                                                               \
+      exit(-1);                                                                                    \
+    }                                                                                              \
+  } while (false)
+
+#define OXIAssert(exp) OXIAssertT(exp, "%s:%d", __FILE__, __LINE__)
+#define VOK(val) OXIAssert(val == VK_SUCCESS)
+
+static struct {
   PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
   PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
   PFN_vkCreateInstance vkCreateInstance;
   PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
-} OXI_DISPATCH;
-
-static OXI_DISPATCH vt;
+} vt;
 
 #define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
-  vt.name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                                  \
   do {                                                                                             \
-    if (!vt.name) {                                                                                \
-      fprintf(logFile, "No %s\n", #name);                                                          \
-      return -1;                                                                                   \
-    }                                                                                              \
+    vt.name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                                \
+    OXIAssert(vt.name);                                                                           \
   } while (false)
 
-#define VOK(val) assert(val == VK_SUCCESS)
 #define asize(arr) ((sizeof(arr) / sizeof(arr[0])))
 
 typedef uint8_t u8;
@@ -146,26 +151,23 @@ debugMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 static int win32LoadVulkan() {
   /* Indirectly Linking to the Loader */
   HMODULE vulkan = LoadLibraryW(L"vulkan-1.dll");
-  if (!vulkan) {
-    fprintf(logFile, "No vulkan!\n");
-    return -1;
-  }
+  OXIAssert(vulkan);
 
   PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr =
       (PFN_vkGetInstanceProcAddr)(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
 
-  if (!vkGetInstanceProcAddr) {
-    fprintf(logFile, "No vkGetInstanceProcAddr!\n");
-    return -1;
-  }
+  OXIAssert(vkGetInstanceProcAddr);
 
+#ifdef OXIDEBUG
+  // debug: enumerate layers & extensions
   VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceLayerProperties);
   VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceExtensionProperties);
-  VK_GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
 
   OXIvkEnumerateInstanceExtensionProperties(0);
   OXIvkEnumerateInstanceLayerProperties();
+#endif
 
+  VK_GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
   VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
       .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
@@ -208,6 +210,8 @@ static int win32LoadVulkan() {
   VkDebugUtilsMessengerEXT messenger;
   VOK(vt.vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
                                         &messenger));
+  // VkPhysicalDevice
+  // VkDevice
   return 0;
 }
 
