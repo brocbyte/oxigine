@@ -26,16 +26,18 @@
 #define VOK(val) OXIAssert(val == VK_SUCCESS)
 
 static struct {
+  PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
   PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
   PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
   PFN_vkCreateInstance vkCreateInstance;
   PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
+  PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
 } vt;
 
 #define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
   do {                                                                                             \
-    vt.name = (PFN_##name)(vkGetInstanceProcAddr(instance, #name));                                \
-    OXIAssert(vt.name);                                                                           \
+    vt.name = (PFN_##name)(vt.vkGetInstanceProcAddr(instance, #name));                             \
+    OXIAssert(vt.name);                                                                            \
   } while (false)
 
 #define asize(arr) ((sizeof(arr) / sizeof(arr[0])))
@@ -148,25 +150,26 @@ debugMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
  * https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderInterfaceArchitecture.md
  * https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderApplicationInterface.md
  */
-static int win32LoadVulkan() {
+static void win32LoadVulkan() {
   /* Indirectly Linking to the Loader */
   HMODULE vulkan = LoadLibraryW(L"vulkan-1.dll");
   OXIAssert(vulkan);
 
-  PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr =
+  vt.vkGetInstanceProcAddr =
       (PFN_vkGetInstanceProcAddr)(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
 
-  OXIAssert(vkGetInstanceProcAddr);
+  OXIAssert(vt.vkGetInstanceProcAddr);
+}
 
-#ifdef OXIDEBUG
-  // debug: enumerate layers & extensions
+static void dbgEnumerateInstanceStuff() {
   VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceLayerProperties);
   VK_GET_INSTANCE_PROC_ADDR(0, vkEnumerateInstanceExtensionProperties);
 
   OXIvkEnumerateInstanceExtensionProperties(0);
   OXIvkEnumerateInstanceLayerProperties();
-#endif
+}
 
+static VkInstance OXIvkCreateInstance() {
   VK_GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
   VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -210,9 +213,23 @@ static int win32LoadVulkan() {
   VkDebugUtilsMessengerEXT messenger;
   VOK(vt.vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsMessengerCreateInfoEXT, 0,
                                         &messenger));
-  // VkPhysicalDevice
-  // VkDevice
-  return 0;
+  return instance;
+}
+
+void pickPhysicalDevice(VkInstance instance) {
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkEnumeratePhysicalDevices);
+  uint32_t nPhysicalDevices;
+  VOK(vt.vkEnumeratePhysicalDevices(instance, &nPhysicalDevices, 0));
+  fprintf(logFile, "nPhysicalDevices: %d\n", nPhysicalDevices);
+}
+
+void win32SetupRenderer() {
+  win32LoadVulkan();
+#ifdef OXIDEBUG
+  dbgEnumerateInstanceStuff();
+#endif
+  VkInstance instance = OXIvkCreateInstance();
+  pickPhysicalDevice(instance);
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
@@ -230,10 +247,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLi
     exit(-1);
 
   logFile = fopen("last_run.log", "w");
-
-  if (win32LoadVulkan() != 0) {
-    exit(-1);
-  }
+  win32SetupRenderer();
 
   globalRunning = true;
   // while (globalRunning) {
