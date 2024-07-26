@@ -27,16 +27,30 @@
 
 static struct {
   PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
+  PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
+
   PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
   PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
   PFN_vkCreateInstance vkCreateInstance;
   PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT;
   PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
+  PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties;
+  PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures;
+  PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
+  PFN_vkCreateDevice vkCreateDevice;
+
+  PFN_vkGetDeviceQueue vkGetDeviceQueue;
 } vt;
 
 #define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
   do {                                                                                             \
     vt.name = (PFN_##name)(vt.vkGetInstanceProcAddr(instance, #name));                             \
+    OXIAssert(vt.name);                                                                            \
+  } while (false)
+
+#define VK_GET_DEVICE_PROC_ADDR(device, name)                                                  \
+  do {                                                                                             \
+    vt.name = (PFN_##name)(vt.vkGetDeviceProcAddr(device, #name));                             \
     OXIAssert(vt.name);                                                                            \
   } while (false)
 
@@ -216,11 +230,67 @@ static VkInstance OXIvkCreateInstance() {
   return instance;
 }
 
-void pickPhysicalDevice(VkInstance instance) {
+typedef struct OXIVkPhysicalDevice {
+  VkPhysicalDevice vkPhysicalDevice;
+  u32 graphicsQueueFamilyIdx;
+} OXIVkPhysicalDevice;
+
+OXIVkPhysicalDevice pickPhysicalDevice(VkInstance instance) {
   VK_GET_INSTANCE_PROC_ADDR(instance, vkEnumeratePhysicalDevices);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceProperties);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceFeatures);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceQueueFamilyProperties);
+
+  OXIVkPhysicalDevice result = {.vkPhysicalDevice = VK_NULL_HANDLE, .graphicsQueueFamilyIdx = -1};
   uint32_t nPhysicalDevices;
   VOK(vt.vkEnumeratePhysicalDevices(instance, &nPhysicalDevices, 0));
   fprintf(logFile, "nPhysicalDevices: %d\n", nPhysicalDevices);
+  VkPhysicalDevice *pPhysicalDevices = malloc(nPhysicalDevices * sizeof(VkPhysicalDevice));
+  VOK(vt.vkEnumeratePhysicalDevices(instance, &nPhysicalDevices, pPhysicalDevices));
+  for (int i = 0; i < nPhysicalDevices; ++i) {
+    VkPhysicalDeviceProperties deviceProperties;
+    vt.vkGetPhysicalDeviceProperties(pPhysicalDevices[i], &deviceProperties);
+    VkPhysicalDeviceFeatures deviceFeatures;
+    vt.vkGetPhysicalDeviceFeatures(pPhysicalDevices[i], &deviceFeatures);
+    fprintf(logFile, "deviceName: %s\n", deviceProperties.deviceName);
+    if ((deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) &&
+        deviceFeatures.geometryShader) {
+      result.vkPhysicalDevice = pPhysicalDevices[i];
+    }
+  }
+  free(pPhysicalDevices);
+
+  u32 nQueueFamilyProperty;
+  vt.vkGetPhysicalDeviceQueueFamilyProperties(result.vkPhysicalDevice, &nQueueFamilyProperty, 0);
+  VkQueueFamilyProperties *pQueueFamilyProperties =
+      malloc(nQueueFamilyProperty * sizeof(VkQueueFamilyProperties));
+  vt.vkGetPhysicalDeviceQueueFamilyProperties(result.vkPhysicalDevice, &nQueueFamilyProperty,
+                                              pQueueFamilyProperties);
+  for (int i = 0; i < nQueueFamilyProperty; ++i) {
+    if (pQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+      result.graphicsQueueFamilyIdx = i;
+    }
+  }
+  free(pQueueFamilyProperties);
+  return result;
+}
+
+VkDevice OXIvkCreateDevice(VkInstance instance, OXIVkPhysicalDevice *physicalDevice) {
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkCreateDevice);
+  VkDevice result;
+  float queuePriority = 1.0f;
+  VkDeviceQueueCreateInfo deviceQueueCreateInfo = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = physicalDevice->graphicsQueueFamilyIdx,
+      .queueCount = 1,
+      .pQueuePriorities = &queuePriority};
+  VkPhysicalDeviceFeatures deviceFeatures = {0};
+  const VkDeviceCreateInfo deviceCreateInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                                               .queueCreateInfoCount = 1,
+                                               .pQueueCreateInfos = &deviceQueueCreateInfo,
+                                               .pEnabledFeatures = &deviceFeatures};
+  VOK(vt.vkCreateDevice(physicalDevice->vkPhysicalDevice, &deviceCreateInfo, 0, &result));
+  return result;
 }
 
 void win32SetupRenderer() {
@@ -229,7 +299,12 @@ void win32SetupRenderer() {
   dbgEnumerateInstanceStuff();
 #endif
   VkInstance instance = OXIvkCreateInstance();
-  pickPhysicalDevice(instance);
+  OXIVkPhysicalDevice physicalDevice = pickPhysicalDevice(instance);
+  VkDevice device = OXIvkCreateDevice(instance, &physicalDevice);
+
+  VK_GET_DEVICE_PROC_ADDR(device, vkGetDeviceQueue);
+  VkQueue queue;
+  vt.vkGetDeviceQueue(device, physicalDevice.graphicsQueueFamilyIdx, 0, &queue);
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
