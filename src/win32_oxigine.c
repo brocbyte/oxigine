@@ -12,6 +12,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#define VK_USE_PLATFORM_WIN32_KHR 1
 #include <vulkan/vulkan.h>
 
 #define OXIAssertT(exp, ...)                                                                       \
@@ -26,6 +27,7 @@
 #define VOK(val) OXIAssert(val == VK_SUCCESS)
 
 static struct {
+  // instance functions
   PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
   PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
 
@@ -39,6 +41,10 @@ static struct {
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
   PFN_vkCreateDevice vkCreateDevice;
 
+  //  platform instance functions
+  PFN_vkCreateWin32SurfaceKHR vkCreateWin32SurfaceKHR;
+
+  // device functions
   PFN_vkGetDeviceQueue vkGetDeviceQueue;
 } vt;
 
@@ -48,9 +54,9 @@ static struct {
     OXIAssert(vt.name);                                                                            \
   } while (false)
 
-#define VK_GET_DEVICE_PROC_ADDR(device, name)                                                  \
+#define VK_GET_DEVICE_PROC_ADDR(device, name)                                                      \
   do {                                                                                             \
-    vt.name = (PFN_##name)(vt.vkGetDeviceProcAddr(device, #name));                             \
+    vt.name = (PFN_##name)(vt.vkGetDeviceProcAddr(device, #name));                                 \
     OXIAssert(vt.name);                                                                            \
   } while (false)
 
@@ -207,7 +213,7 @@ static VkInstance OXIvkCreateInstance() {
       .pNext = &debugUtilsMessengerCreateInfoEXT};
 
   char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
-  char *instance_extensions[] = {"VK_EXT_debug_utils"};
+  char *instance_extensions[] = {"VK_EXT_debug_utils", "VK_KHR_surface", "VK_KHR_win32_surface"};
   const VkApplicationInfo applicationInfo = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                              .pApplicationName = "OXIGINE_APP",
                                              .pEngineName = "OXIGINE_ENGINE",
@@ -217,7 +223,7 @@ static VkInstance OXIvkCreateInstance() {
                                                    .pApplicationInfo = &applicationInfo,
                                                    .enabledLayerCount = 1,
                                                    .ppEnabledLayerNames = instance_layers,
-                                                   .enabledExtensionCount = 1,
+                                                   .enabledExtensionCount = 3,
                                                    .ppEnabledExtensionNames = instance_extensions};
   VkInstance instance;
   VOK(vt.vkCreateInstance(&instanceCreateInfo, 0, &instance));
@@ -293,7 +299,25 @@ VkDevice OXIvkCreateDevice(VkInstance instance, OXIVkPhysicalDevice *physicalDev
   return result;
 }
 
-void win32SetupRenderer() {
+VkQueue OXIvkGetDeviceQueue(VkDevice device, OXIVkPhysicalDevice *physicalDevice) {
+  VK_GET_DEVICE_PROC_ADDR(device, vkGetDeviceQueue);
+  VkQueue queue;
+  vt.vkGetDeviceQueue(device, physicalDevice->graphicsQueueFamilyIdx, 0, &queue);
+  return queue;
+}
+
+VkSurfaceKHR OXIvkCreateWin32SurfaceKHR(VkInstance instance, HINSTANCE hInstance, HWND hwnd) {
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkCreateWin32SurfaceKHR);
+  VkWin32SurfaceCreateInfoKHR win32SurfaceCreateInfoKHR = {
+      .sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+      .hwnd = hwnd,
+      .hinstance = hInstance};
+  VkSurfaceKHR surface;
+  VOK(vt.vkCreateWin32SurfaceKHR(instance, &win32SurfaceCreateInfoKHR, 0, &surface));
+  return surface;
+}
+
+void win32SetupRenderer(HINSTANCE hInstance, HWND hwnd) {
   win32LoadVulkan();
 #ifdef OXIDEBUG
   dbgEnumerateInstanceStuff();
@@ -302,9 +326,10 @@ void win32SetupRenderer() {
   OXIVkPhysicalDevice physicalDevice = pickPhysicalDevice(instance);
   VkDevice device = OXIvkCreateDevice(instance, &physicalDevice);
 
-  VK_GET_DEVICE_PROC_ADDR(device, vkGetDeviceQueue);
-  VkQueue queue;
-  vt.vkGetDeviceQueue(device, physicalDevice.graphicsQueueFamilyIdx, 0, &queue);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetDeviceProcAddr);
+
+  VkQueue queue = OXIvkGetDeviceQueue(device, &physicalDevice);
+  VkSurfaceKHR surface = OXIvkCreateWin32SurfaceKHR(instance, hInstance, hwnd);
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
@@ -322,7 +347,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLi
     exit(-1);
 
   logFile = fopen("last_run.log", "w");
-  win32SetupRenderer();
+  win32SetupRenderer(hInstance, window);
 
   globalRunning = true;
   // while (globalRunning) {
