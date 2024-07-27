@@ -39,13 +39,16 @@ static struct {
   PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties;
   PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties vkGetPhysicalDeviceQueueFamilyProperties;
+  PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR;
   PFN_vkCreateDevice vkCreateDevice;
 
   //  platform instance functions
   PFN_vkCreateWin32SurfaceKHR vkCreateWin32SurfaceKHR;
+  PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
 
   // device functions
   PFN_vkGetDeviceQueue vkGetDeviceQueue;
+  PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR;
 } vt;
 
 #define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
@@ -241,11 +244,12 @@ typedef struct OXIVkPhysicalDevice {
   u32 graphicsQueueFamilyIdx;
 } OXIVkPhysicalDevice;
 
-OXIVkPhysicalDevice pickPhysicalDevice(VkInstance instance) {
+OXIVkPhysicalDevice pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface) {
   VK_GET_INSTANCE_PROC_ADDR(instance, vkEnumeratePhysicalDevices);
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceProperties);
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceFeatures);
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceQueueFamilyProperties);
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceSurfaceSupportKHR);
 
   OXIVkPhysicalDevice result = {.vkPhysicalDevice = VK_NULL_HANDLE, .graphicsQueueFamilyIdx = -1};
   uint32_t nPhysicalDevices;
@@ -273,7 +277,10 @@ OXIVkPhysicalDevice pickPhysicalDevice(VkInstance instance) {
   vt.vkGetPhysicalDeviceQueueFamilyProperties(result.vkPhysicalDevice, &nQueueFamilyProperty,
                                               pQueueFamilyProperties);
   for (int i = 0; i < nQueueFamilyProperty; ++i) {
-    if (pQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+    VkBool32 surfaceSupport;
+    vt.vkGetPhysicalDeviceSurfaceSupportKHR(result.vkPhysicalDevice, i, surface, &surfaceSupport);
+    bool graphicsSupport = (pQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+    if (graphicsSupport && (surfaceSupport == VK_TRUE)) {
       result.graphicsQueueFamilyIdx = i;
     }
   }
@@ -291,10 +298,13 @@ VkDevice OXIvkCreateDevice(VkInstance instance, OXIVkPhysicalDevice *physicalDev
       .queueCount = 1,
       .pQueuePriorities = &queuePriority};
   VkPhysicalDeviceFeatures deviceFeatures = {0};
+  char *extension_names[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
   const VkDeviceCreateInfo deviceCreateInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                                                .queueCreateInfoCount = 1,
                                                .pQueueCreateInfos = &deviceQueueCreateInfo,
-                                               .pEnabledFeatures = &deviceFeatures};
+                                               .pEnabledFeatures = &deviceFeatures,
+                                               .ppEnabledExtensionNames = extension_names,
+                                               .enabledExtensionCount = 1};
   VOK(vt.vkCreateDevice(physicalDevice->vkPhysicalDevice, &deviceCreateInfo, 0, &result));
   return result;
 }
@@ -317,19 +327,57 @@ VkSurfaceKHR OXIvkCreateWin32SurfaceKHR(VkInstance instance, HINSTANCE hInstance
   return surface;
 }
 
+VkSwapchainKHR OXIvkCreateSwapchainKHR(VkInstance instance, VkDevice device, VkSurfaceKHR surface,
+                                       OXIVkPhysicalDevice *physicalDevice, RECT *rect) {
+  VkSwapchainKHR result;
+  VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+  VK_GET_DEVICE_PROC_ADDR(device, vkCreateSwapchainKHR);
+  VkSurfaceCapabilitiesKHR surfaceCapabilitiesKHR;
+  VOK(vt.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice->vkPhysicalDevice, surface,
+                                                   &surfaceCapabilitiesKHR));
+  VkExtent2D swapchainExtent = {0};
+  if (surfaceCapabilitiesKHR.currentExtent.width == -1 ||
+      surfaceCapabilitiesKHR.currentExtent.height == -1) {
+    swapchainExtent.width = rect->right - rect->left;
+    swapchainExtent.height = rect->top - rect->bottom;
+  } else {
+    swapchainExtent = surfaceCapabilitiesKHR.currentExtent;
+  }
+  VkSwapchainCreateInfoKHR createInfo = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                                         .surface = surface,
+                                         .minImageCount = surfaceCapabilitiesKHR.minImageCount,
+                                         .imageFormat = VK_FORMAT_B8G8R8A8_SRGB,
+                                         .imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                                         .imageExtent = swapchainExtent,
+                                         .imageArrayLayers = 1,
+                                         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                                         .presentMode = VK_PRESENT_MODE_MAILBOX_KHR,
+                                         .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+                                         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR};
+  VOK(vt.vkCreateSwapchainKHR(device, &createInfo, 0, &result));
+  return result;
+}
+
 void win32SetupRenderer(HINSTANCE hInstance, HWND hwnd) {
   win32LoadVulkan();
 #ifdef OXIDEBUG
   dbgEnumerateInstanceStuff();
 #endif
   VkInstance instance = OXIvkCreateInstance();
-  OXIVkPhysicalDevice physicalDevice = pickPhysicalDevice(instance);
+  VkSurfaceKHR surface = OXIvkCreateWin32SurfaceKHR(instance, hInstance, hwnd);
+
+  OXIVkPhysicalDevice physicalDevice = pickPhysicalDevice(instance, surface);
   VkDevice device = OXIvkCreateDevice(instance, &physicalDevice);
 
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetDeviceProcAddr);
 
   VkQueue queue = OXIvkGetDeviceQueue(device, &physicalDevice);
-  VkSurfaceKHR surface = OXIvkCreateWin32SurfaceKHR(instance, hInstance, hwnd);
+
+  RECT windowRect;
+  OXIAssert(GetWindowRect(hwnd, &windowRect));
+  VkSwapchainKHR swapchain =
+      OXIvkCreateSwapchainKHR(instance, device, surface, &physicalDevice, &windowRect);
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
