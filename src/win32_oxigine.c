@@ -15,10 +15,15 @@
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #include <vulkan/vulkan.h>
 
+#define OXILog(...)                                                                                \
+  do {                                                                                             \
+    fprintf(logFile, __VA_ARGS__);                                                                 \
+  } while (false)
+
 #define OXIAssertT(exp, ...)                                                                       \
   do {                                                                                             \
     if (!(exp)) {                                                                                  \
-      fprintf(logFile, __VA_ARGS__);                                                               \
+      OXILog(__VA_ARGS__);                                                                         \
       exit(-1);                                                                                    \
     }                                                                                              \
   } while (false)
@@ -132,41 +137,45 @@ static void win32ProcessMessages() {
   }
 }
 
-static void OXIvkEnumerateInstanceExtensionProperties(char *layerName) {
-  uint32_t nExtensions;
-  VOK(vt.vkEnumerateInstanceExtensionProperties(layerName, &nExtensions, 0));
+#define DEFINE_DARRAY0(Type, Func, ...)                                                            \
+  u32 n##Type;                                                                                     \
+  VOK(vt.##Func(&n##Type, 0));                                                                     \
+  Type *p##Type = (Type *)malloc(n##Type * sizeof(Type));                                          \
+  VOK(vt.##Func(&n##Type, p##Type))
 
-  VkExtensionProperties *pExtensions =
-      (VkExtensionProperties *)malloc(nExtensions * sizeof(VkExtensionProperties));
-  VOK(vt.vkEnumerateInstanceExtensionProperties(layerName, &nExtensions, pExtensions));
-  fprintf(logFile, "\t\textensions: {\n");
-  for (int i = 0; i < nExtensions; ++i) {
-    fprintf(logFile, "\t\t\t%s,\n", pExtensions[i].extensionName);
+#define DEFINE_DARRAY(Type, Func, Check, ...)                                                      \
+  u32 n##Type;                                                                                     \
+  Check(vt.##Func(__VA_ARGS__, &n##Type, 0));                                                      \
+  Type *p##Type = (Type *)malloc(n##Type * sizeof(Type));                                          \
+  Check(vt.##Func(__VA_ARGS__, &n##Type, p##Type))
+
+static void OXIvkEnumerateInstanceExtensionProperties(char *layerName) {
+  DEFINE_DARRAY(VkExtensionProperties, vkEnumerateInstanceExtensionProperties, VOK, layerName);
+  OXILog("\t\textensions: {\n");
+  for (int i = 0; i < nVkExtensionProperties; ++i) {
+    OXILog("\t\t\t%s,\n", pVkExtensionProperties[i].extensionName);
   }
-  fprintf(logFile, "\t\t}\n");
-  free(pExtensions);
+  OXILog("\t\t}\n");
+  free(pVkExtensionProperties);
 }
 
 static void OXIvkEnumerateInstanceLayerProperties() {
-  uint32_t nLayers;
-  VOK(vt.vkEnumerateInstanceLayerProperties(&nLayers, 0));
-  VkLayerProperties *pLayers = (VkLayerProperties *)malloc(nLayers * sizeof(VkLayerProperties));
-  VOK(vt.vkEnumerateInstanceLayerProperties(&nLayers, pLayers));
-  fprintf(logFile, "Layers available: {\n");
-  for (int i = 0; i < nLayers; ++i) {
-    fprintf(logFile, "\t%s:{\n", pLayers[i].layerName);
-    OXIvkEnumerateInstanceExtensionProperties(pLayers[i].layerName);
-    fprintf(logFile, "\t},\n");
+  DEFINE_DARRAY0(VkLayerProperties, vkEnumerateInstanceLayerProperties);
+  OXILog("Layers available: {\n");
+  for (int i = 0; i < nVkLayerProperties; ++i) {
+    OXILog("\t%s:{\n", pVkLayerProperties[i].layerName);
+    OXIvkEnumerateInstanceExtensionProperties(pVkLayerProperties[i].layerName);
+    OXILog("\t},\n");
   }
-  fprintf(logFile, "},\n");
-  free(pLayers);
+  OXILog("},\n");
+  free(pVkLayerProperties);
 }
 
 static VKAPI_ATTR VkBool32
 debugMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                        VkDebugUtilsMessageTypeFlagsEXT messageTypes,
                        const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData, void *pUserData) {
-  fprintf(logFile, "debug: %s\n", pCallbackData->pMessage);
+  OXILog("debug: %s\n", pCallbackData->pMessage);
   return VK_FALSE;
 }
 
@@ -193,23 +202,24 @@ static void dbgEnumerateInstanceStuff() {
   OXIvkEnumerateInstanceLayerProperties();
 }
 
+#define MESSAGE_SEVERITY(F) VK_DEBUG_UTILS_MESSAGE_SEVERITY_##F##_BIT_EXT
+#define MESSAGE_TYPE(F) VK_DEBUG_UTILS_MESSAGE_TYPE_##F##_BIT_EXT
+#define VALIDATION_FEATURE(F) VK_VALIDATION_FEATURE_ENABLE_##F##_EXT
 static VkInstance OXIvkCreateInstance() {
   VK_GET_INSTANCE_PROC_ADDR(0, vkCreateInstance);
+
   VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT = {
       .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
+      .messageSeverity = MESSAGE_SEVERITY(VERBOSE) | MESSAGE_SEVERITY(WARNING) |
+                         MESSAGE_SEVERITY(INFO) | MESSAGE_SEVERITY(ERROR),
+      .messageType = MESSAGE_TYPE(GENERAL) | MESSAGE_TYPE(VALIDATION) | MESSAGE_TYPE(PERFORMANCE) |
+                     MESSAGE_TYPE(DEVICE_ADDRESS_BINDING),
       debugMessengerCallback};
+
   VkValidationFeatureEnableEXT aValidationFeatureEnableEXT[] = {
-      VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
-      VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT,
-      VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT};
+      VALIDATION_FEATURE(BEST_PRACTICES), VALIDATION_FEATURE(DEBUG_PRINTF),
+      VALIDATION_FEATURE(SYNCHRONIZATION_VALIDATION)};
+
   const VkValidationFeaturesEXT validationFeaturesEXT = {
       .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
       .enabledValidationFeatureCount = asize(aValidationFeatureEnableEXT),
@@ -217,7 +227,8 @@ static VkInstance OXIvkCreateInstance() {
       .pNext = &debugUtilsMessengerCreateInfoEXT};
 
   char *instance_layers[] = {"VK_LAYER_KHRONOS_validation"};
-  char *instance_extensions[] = {"VK_EXT_debug_utils", "VK_KHR_surface", "VK_KHR_win32_surface"};
+  char *instance_extensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME, "VK_KHR_surface",
+                                 "VK_KHR_win32_surface"};
   const VkApplicationInfo applicationInfo = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                              .pApplicationName = "OXIGINE_APP",
                                              .pEngineName = "OXIGINE_ENGINE",
@@ -239,6 +250,9 @@ static VkInstance OXIvkCreateInstance() {
                                         &messenger));
   return instance;
 }
+#undef VALIDATION_FEATURE
+#undef MESSAGE_TYPE
+#undef MESSAGE_SEVERITY
 
 typedef struct OXIVkPhysicalDevice {
   VkPhysicalDevice vkPhysicalDevice;
@@ -253,39 +267,33 @@ OXIVkPhysicalDevice pickPhysicalDevice(VkInstance instance, VkSurfaceKHR surface
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceSurfaceSupportKHR);
 
   OXIVkPhysicalDevice result = {.vkPhysicalDevice = VK_NULL_HANDLE, .graphicsQueueFamilyIdx = -1};
-  uint32_t nPhysicalDevices;
-  VOK(vt.vkEnumeratePhysicalDevices(instance, &nPhysicalDevices, 0));
-  fprintf(logFile, "nPhysicalDevices: %d\n", nPhysicalDevices);
-  VkPhysicalDevice *pPhysicalDevices = malloc(nPhysicalDevices * sizeof(VkPhysicalDevice));
-  VOK(vt.vkEnumeratePhysicalDevices(instance, &nPhysicalDevices, pPhysicalDevices));
-  for (int i = 0; i < nPhysicalDevices; ++i) {
+  DEFINE_DARRAY(VkPhysicalDevice, vkEnumeratePhysicalDevices, VOK, instance);
+  OXILog("nPhysicalDevices: %d\n", nVkPhysicalDevice);
+
+  for (int i = 0; i < nVkPhysicalDevice; ++i) {
     VkPhysicalDeviceProperties deviceProperties;
-    vt.vkGetPhysicalDeviceProperties(pPhysicalDevices[i], &deviceProperties);
+    vt.vkGetPhysicalDeviceProperties(pVkPhysicalDevice[i], &deviceProperties);
     VkPhysicalDeviceFeatures deviceFeatures;
-    vt.vkGetPhysicalDeviceFeatures(pPhysicalDevices[i], &deviceFeatures);
-    fprintf(logFile, "deviceName: %s\n", deviceProperties.deviceName);
+    vt.vkGetPhysicalDeviceFeatures(pVkPhysicalDevice[i], &deviceFeatures);
+    OXILog("deviceName: %s\n", deviceProperties.deviceName);
     if ((deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) &&
         deviceFeatures.geometryShader) {
-      result.vkPhysicalDevice = pPhysicalDevices[i];
+      result.vkPhysicalDevice = pVkPhysicalDevice[i];
     }
   }
-  free(pPhysicalDevices);
+  free(pVkPhysicalDevice);
 
-  u32 nQueueFamilyProperty;
-  vt.vkGetPhysicalDeviceQueueFamilyProperties(result.vkPhysicalDevice, &nQueueFamilyProperty, 0);
-  VkQueueFamilyProperties *pQueueFamilyProperties =
-      malloc(nQueueFamilyProperty * sizeof(VkQueueFamilyProperties));
-  vt.vkGetPhysicalDeviceQueueFamilyProperties(result.vkPhysicalDevice, &nQueueFamilyProperty,
-                                              pQueueFamilyProperties);
-  for (int i = 0; i < nQueueFamilyProperty; ++i) {
+  DEFINE_DARRAY(VkQueueFamilyProperties, vkGetPhysicalDeviceQueueFamilyProperties, (void),
+                result.vkPhysicalDevice);
+  for (int i = 0; i < nVkQueueFamilyProperties; ++i) {
     VkBool32 surfaceSupport;
     vt.vkGetPhysicalDeviceSurfaceSupportKHR(result.vkPhysicalDevice, i, surface, &surfaceSupport);
-    bool graphicsSupport = (pQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+    bool graphicsSupport = (pVkQueueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
     if (graphicsSupport && (surfaceSupport == VK_TRUE)) {
       result.graphicsQueueFamilyIdx = i;
     }
   }
-  free(pQueueFamilyProperties);
+  free(pVkQueueFamilyProperties);
   return result;
 }
 
@@ -366,10 +374,9 @@ OXIVkSwapchainKHR OXIvkCreateSwapchainKHR(VkInstance instance, VkDevice device,
   VOK(vt.vkCreateSwapchainKHR(device, &createInfo, 0, &result.vkSwapchainKHR));
 
   VK_GET_DEVICE_PROC_ADDR(device, vkGetSwapchainImagesKHR);
-  VOK(vt.vkGetSwapchainImagesKHR(device, result.vkSwapchainKHR, &result.nSwapchainImages, 0));
-  result.pSwapchainImages = malloc(result.nSwapchainImages * sizeof(VkImage));
-  VOK(vt.vkGetSwapchainImagesKHR(device, result.vkSwapchainKHR, &result.nSwapchainImages,
-                                 result.pSwapchainImages));
+  DEFINE_DARRAY(VkImage, vkGetSwapchainImagesKHR, VOK, device, result.vkSwapchainKHR);
+  result.nSwapchainImages = nVkImage;
+  result.pSwapchainImages = pVkImage;
   return result;
 }
 
