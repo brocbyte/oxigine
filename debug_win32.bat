@@ -1,0 +1,1 @@
+devenv misc\win32_oxigine.sln

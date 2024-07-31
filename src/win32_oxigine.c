@@ -49,6 +49,7 @@ static struct {
   // device functions
   PFN_vkGetDeviceQueue vkGetDeviceQueue;
   PFN_vkCreateSwapchainKHR vkCreateSwapchainKHR;
+  PFN_vkGetSwapchainImagesKHR vkGetSwapchainImagesKHR;
 } vt;
 
 #define VK_GET_INSTANCE_PROC_ADDR(instance, name)                                                  \
@@ -327,9 +328,16 @@ VkSurfaceKHR OXIvkCreateWin32SurfaceKHR(VkInstance instance, HINSTANCE hInstance
   return surface;
 }
 
-VkSwapchainKHR OXIvkCreateSwapchainKHR(VkInstance instance, VkDevice device, VkSurfaceKHR surface,
-                                       OXIVkPhysicalDevice *physicalDevice, RECT *rect) {
-  VkSwapchainKHR result;
+typedef struct OXIVkSwapchainKHR {
+  VkSwapchainKHR vkSwapchainKHR;
+  VkImage *pSwapchainImages;
+  u32 nSwapchainImages;
+} OXIVkSwapchainKHR;
+
+OXIVkSwapchainKHR OXIvkCreateSwapchainKHR(VkInstance instance, VkDevice device,
+                                          VkSurfaceKHR surface, OXIVkPhysicalDevice *physicalDevice,
+                                          RECT *rect) {
+  OXIVkSwapchainKHR result;
   VK_GET_INSTANCE_PROC_ADDR(instance, vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
   VK_GET_DEVICE_PROC_ADDR(device, vkCreateSwapchainKHR);
   VkSurfaceCapabilitiesKHR surfaceCapabilitiesKHR;
@@ -355,7 +363,13 @@ VkSwapchainKHR OXIvkCreateSwapchainKHR(VkInstance instance, VkDevice device, VkS
                                          .presentMode = VK_PRESENT_MODE_MAILBOX_KHR,
                                          .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
                                          .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR};
-  VOK(vt.vkCreateSwapchainKHR(device, &createInfo, 0, &result));
+  VOK(vt.vkCreateSwapchainKHR(device, &createInfo, 0, &result.vkSwapchainKHR));
+
+  VK_GET_DEVICE_PROC_ADDR(device, vkGetSwapchainImagesKHR);
+  VOK(vt.vkGetSwapchainImagesKHR(device, result.vkSwapchainKHR, &result.nSwapchainImages, 0));
+  result.pSwapchainImages = malloc(result.nSwapchainImages * sizeof(VkImage));
+  VOK(vt.vkGetSwapchainImagesKHR(device, result.vkSwapchainKHR, &result.nSwapchainImages,
+                                 result.pSwapchainImages));
   return result;
 }
 
@@ -376,7 +390,7 @@ void win32SetupRenderer(HINSTANCE hInstance, HWND hwnd) {
 
   RECT windowRect;
   OXIAssert(GetWindowRect(hwnd, &windowRect));
-  VkSwapchainKHR swapchain =
+  OXIVkSwapchainKHR swapchain =
       OXIvkCreateSwapchainKHR(instance, device, surface, &physicalDevice, &windowRect);
 }
 
