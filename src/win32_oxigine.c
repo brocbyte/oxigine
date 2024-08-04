@@ -1,34 +1,12 @@
-#ifndef UNICODE
-#define UNICODE
-#endif
-
-#ifndef _UNICODE
-#define _UNICODE
-#endif
+#include "oxiassert.h"
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <windows.h>
 
 #include <assert.h>
-#include <stdio.h>
 #define VK_USE_PLATFORM_WIN32_KHR 1
 #include <vulkan/vulkan.h>
 
-#define OXILog(...)                                                                                \
-  do {                                                                                             \
-    fprintf(logFile, __VA_ARGS__);                                                                 \
-  } while (false)
-
-#define OXIAssertT(exp, ...)                                                                       \
-  do {                                                                                             \
-    if (!(exp)) {                                                                                  \
-      OXILog(__VA_ARGS__);                                                                         \
-      exit(-1);                                                                                    \
-    }                                                                                              \
-  } while (false)
-
-#define OXIAssert(exp) OXIAssertT(exp, "%s:%d", __FILE__, __LINE__)
 #define VOK(val) OXIAssert(val == VK_SUCCESS)
 
 static struct {
@@ -71,20 +49,8 @@ static struct {
 
 #define asize(arr) ((sizeof(arr) / sizeof(arr[0])))
 
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int8_t i8;
-typedef int16_t i16;
-typedef int32_t i32;
-typedef int64_t i64;
-typedef i32 b32;
-typedef float f32;
-typedef double f64;
-
 static b32 globalRunning;
-static FILE *logFile;
+FILE *logFile;
 
 LRESULT CALLBACK win32WindowsCallback(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
   LRESULT result = 0;
